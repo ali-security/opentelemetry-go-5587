@@ -42,6 +42,13 @@ func newNoopClient() *client {
 	return &client{}
 }
 
+// maxResponseBodySize is the maximum number of bytes to read from a response
+// body. It is set to 4 MiB per the OTLP specification recommendation to
+// mitigate excessive memory usage caused by a misconfigured or malicious
+// server. If exceeded, the response is treated as a not-retryable error.
+// This is a variable to allow tests to override it.
+var maxResponseBodySize int64 = 4 * 1024 * 1024
+
 // newHTTPClient creates a new HTTP log client.
 func newHTTPClient(cfg config) (*client, error) {
 	hc := &http.Client{
@@ -162,7 +169,11 @@ func (c *httpClient) uploadLogs(ctx context.Context, data []*logpb.ResourceLogs)
 
 			// Read the partial success message, if any.
 			var respData bytes.Buffer
-			if _, err := io.Copy(&respData, resp.Body); err != nil {
+			if _, err := io.Copy(&respData, http.MaxBytesReader(nil, resp.Body, maxResponseBodySize)); err != nil {
+				var maxBytesErr *http.MaxBytesError
+				if errors.As(err, &maxBytesErr) {
+					return fmt.Errorf("response body too large: exceeded %d bytes", maxBytesErr.Limit)
+				}
 				return err
 			}
 			if respData.Len() == 0 {
@@ -193,7 +204,11 @@ func (c *httpClient) uploadLogs(ctx context.Context, data []*logpb.ResourceLogs)
 		// message to be returned. It will help in
 		// debugging the actual issue.
 		var respData bytes.Buffer
-		if _, err := io.Copy(&respData, resp.Body); err != nil {
+		if _, err := io.Copy(&respData, http.MaxBytesReader(nil, resp.Body, maxResponseBodySize)); err != nil {
+			var maxBytesErr *http.MaxBytesError
+			if errors.As(err, &maxBytesErr) {
+				return fmt.Errorf("response body too large: exceeded %d bytes", maxBytesErr.Limit)
+			}
 			return err
 		}
 		respStr := strings.TrimSpace(respData.String())
